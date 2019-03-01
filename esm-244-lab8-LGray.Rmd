@@ -1,0 +1,316 @@
+---
+title: "ESM 244 Lab 08"
+author: "Laura Gray"
+date: "February 28, 2019"
+output: html_document
+---
+
+##***Cluster Analyses and Text Analyses***
+
+*Awesome things*:
+
+- make column headings look nice using janitor::clean_names()
+- grab certain *rows* of a df using tidyverse::slice()
+- anti_join()
+
+###*0. Load Packages*
+
+-library(tidyverse)
+-library(janitor)
+-library(plotly) #less popular since increase with shiny, but still useful!
+-library(factoextra) #used before with biplots for pca
+-library(RColorBrewer)
+
+*cluster analyses*
+-library(NbClust)
+-library(cluster)
+-library(dendextend)
+-library(ggdendro)
+
+*text analyses*
+-library(pdftools)
+-library(tidytext)
+-library(wordcloud)
+
+```{r setup, include=FALSE}
+
+library(tidyverse)
+library(janitor)
+library(plotly) #less popular since increase with shiny, but still useful!
+library(factoextra) #used before with biplots for pca
+library(RColorBrewer)
+
+#cluster analyses
+library(NbClust)
+library(cluster)
+library(dendextend)
+library(ggdendro)
+
+#text analyses
+library(pdftools)
+library(tidytext)
+library(wordcloud)
+
+```
+
+###*1. k-means clustering*
+
+A. check it out 
+
+```{r}
+# make column headings look nice using janitor::clean_names()
+iris_nice <- iris %>% 
+  clean_names()
+
+ggplot(iris_nice) +
+  geom_point(aes(x = petal_length, y = petal_width, color = species))
+
+# It's kinda obvious, but, let's ask "How many clusters do you THINK there should be, R?" 
+# Use NbClust::NbClust
+# [1:4] refers to columns
+# also set minimum and maximum number of clusters to consider
+number_est <- NbClust(iris_nice[1:4], min.nc = 2, max.nc = 10, method = "kmeans")
+
+# Conclusion: "the best number of clusters is 2"
+# But we'll stick with 3 clusters because of what we know about the data
+
+```
+
+B. Perform k-means, Explore outcome
+
+```{r}
+
+# specify [columns] and number of clusters (3)
+iris_km <- kmeans(iris_nice[1:4], 3)
+
+# how many observations per cluster? 
+iris_km$size
+
+# for each variable, what is the multivariate center location in 4D space? 
+iris_km$centers
+
+# what cluster has each observation been assigned to?
+iris_km$cluster
+
+# take these cluster assignments, and then put this information in a df with the original data. wow!
+iris_cl <- data.frame(iris_nice, cluster_no = factor(iris_km$cluster))
+View(iris_cl)
+
+# let's check out how these clusters formed in 2 of the 4 total dimensions:
+ggplot(iris_cl) +
+  geom_point(aes(x = sepal_length, y = sepal_width, color = cluster_no))
+
+# to better conceptualize some of those other dimensions, use "pch=species" in visualization
+ggplot(iris_cl) +
+  geom_point(aes(x = petal_length, y = petal_width, color = cluster_no, pch = species)) +
+  scale_color_brewer(palette = "Dark2") + 
+  theme_light()
+
+# but if we really want a 3D representation, use plotly! different syntax, here:
+# plotly strengths: you can also create your own interactive widgets, and reactive output is maintained in an html file output (knitted)!!
+plot_ly(x = iris_cl$petal_length,
+        y = iris_cl$petal_width,
+        z = iris_cl$sepal_width,
+        type = "scatter3d",
+        color = iris_cl$cluster_no, 
+        symbol = ~iris_cl$species,
+        marker = list(size = 3),
+        colors = "Set1")
+```
+
+###*2. Heirarchical cluster analysis*
+
+*Data*: >150 countries, 
+
+*Note*: Very different orders of magnitude of some of these variables. It's useful, then, to scale data using the scale() function.
+
+A. Wrangle
+
+```{r wrangle}
+
+#remember this syntax for working within R projects
+wb_env <- read_csv("wb_env.csv")
+
+#only keep top 20 ghg emitting countries
+#syntax note: dash in "-ghg" refers to the column
+wb_ghg_20 <- wb_env %>% 
+  arrange(-ghg) %>% 
+  head(20)
+
+#now scale the data and coerce numerical back to a df 
+#(since the scale function will automatically store the result as a list)
+wb_scaled <- as.data.frame(scale(wb_ghg_20[3:7]))
+# Update to add countries as rowNAMES
+rownames(wb_scaled) <- wb_ghg_20$name
+
+```
+
+B. Calculate euclidean distances and do some agglomerative and divisive clustering. Results = dendrograms.
+
+```{r }
+
+# NOW, compute dissimilarity values (Euclidean distances)!
+# from stats::dist
+diss <- dist(wb_scaled, method = "euclidean")
+
+# Hierarchical agglomerative clustering (complete linkage)!
+# this will create a dendrogram
+# feed it the dissimilarity matrix (diss)
+# complete is the default method, but write it anyways
+hc_complete <- hclust(diss, method = "complete")
+
+# Plot it (base plot):
+plot(hc_complete, cex = 0.6, hang = -1)
+
+# Now cluster these divisively - and see some differences in output.
+hc_div <- diana(diss)
+plot(hc_div)
+```
+
+C. Compare these results, since they differ slightly.
+
+```{r}
+
+# Convert to class dendrogram
+dend1 <- as.dendrogram(hc_complete)
+dend2 <- as.dendrogram(hc_div)
+
+# Combine into list
+dend_list <- dendlist(dend1,dend2)
+
+#a tanglegram will show differences between dendograms
+# if the methods had produced the same results, we would see straight lines across, here
+tanglegram(dend1, dend2)
+
+# Convert to class 'dendro' for ggplotting
+data1 <- dendro_data(hc_complete)
+
+# Simple plot with ggdendrogram
+ggdendrogram(hc_complete, 
+             rotate = TRUE) +
+  theme_minimal() +
+  labs(x = "Country")
+
+# Want to do it actually in ggplot? Here: 
+label_data <- bind_cols(filter(segment(data1), x == xend & x%%1 == 0), label(data1))
+
+ggplot() + 
+geom_segment(data=segment(data1), aes(x=x, y=y, xend=xend, yend=yend)) +
+geom_text(data=label_data, aes(x=xend, y=yend, label=label, hjust=0), size=2) +
+coord_flip() + 
+scale_y_reverse(expand=c(0.2, 0)) +
+theme_bw() +
+theme(panel.border = element_blank(),
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(),
+      axis.line = element_blank(),
+      axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      legend.position = "None") 
+
+```
+
+###*3. Intro to Text Analysis*
+
+***pdftools, stringr, tidytext***
+
+A. Extract and analyze information from a pdf, using Greta Thunberg's speech from COP24
+
+```{r}
+
+#note new syntax in specifying file path
+greta <- file.path("greta_thunberg.pdf")
+thunberg_text <- pdf_text(greta)
+
+#bring in as a dataframe, but it all shows up in one cell
+#can use \n as a delimiter to break things up
+#note that 'text' is the column name
+thunberg_df <- data.frame(text = thunberg_text) %>% 
+  mutate(text_full = str_split(text, '\\n')) %>% 
+  unnest(text_full)
+
+#now just keep speech text (get rid of headers from pdf)
+speech_text <- thunberg_df %>% 
+  select(text_full) %>% 
+  slice(4:18)
+
+#and finally separate out individual words
+sep_words <- speech_text %>% 
+  unnest_tokens(word, text_full)
+
+#and count how many times words show up
+word_count <- sep_words %>% 
+  count(word, sort=TRUE)
+
+#...but common terms like pronouns that we don't want to analyze are here!
+#HAHA! R has built-in lexicons to help us sort these out
+#see stop_words documentation
+
+# Remove the stop words
+words_stop <- sep_words %>% 
+  anti_join(stop_words) 
+
+# And we can count them
+word_count <- words_stop %>% 
+  count(word, sort = TRUE) # Count words and arrange
+word_count
+
+```
+
+B. More stuff. Example sentiment values from lexicon:
+
+```{r}
+
+pos_words <- get_sentiments("afinn") %>% 
+  filter(score == 5 | score == 4) %>% 
+  head(20)
+pos_words
+
+neutral_words <- get_sentiments("afinn") %>% 
+  filter(between(score, -1,1)) %>% 
+  head(20)
+neutral_words
+```
+
+C. More stuff. Bind some lexicon information to our actual speech words (non stop words)
+
+*an aside: when in doubt, use full join, keep everything!*
+
+```{r}
+
+sent_afinn <- words_stop %>% 
+  inner_join(get_sentiments("afinn"))
+sent_afinn
+
+#removed "greta" because no matches, via inner join, with the lexicon
+
+sent_nrc <- words_stop %>% 
+  inner_join(get_sentiments("nrc"))
+sent_nrc
+
+nrc_count <- sent_nrc %>% 
+  group_by(sentiment) %>% 
+  tally()
+nrc_count
+```
+
+D. What can we do with these results?
+
+See key for more analyses. But here, let's build a ***Word Cloud***!
+
+```{r}
+
+wordcloud(word_count$word, 
+          freq = word_count$n, 
+          min.freq = 1, 
+          max.words = 65, 
+          scale = c(2, 0.1),
+          colors = brewer.pal(3, "Dark2"))
+
+```
+
+
+
+
+
